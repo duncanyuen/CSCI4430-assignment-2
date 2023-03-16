@@ -33,6 +33,8 @@ using std::ofstream;
 using std::vector;
 using std::unordered_map;
 
+//TODO: fix style
+
 /* Extract the video chunk name from request */
 string get_chunkname(string request) {
     int get_index = request.find("GET");
@@ -83,187 +85,91 @@ string recv_response(int server_sd){
 }
 
 int main(int argc, char const *argv[]) {
-    if (argc < 6 || argc > 7)
-    {
-        perror("Usage: ./miProxy <log> <alpha> <listen-port> <dns-ip> <dns-port> [<www-ip>]");
-        return -1;
+    int listen_port;
+    char *www_ip;
+    float alpha;
+    char *log_path;
+    if (argc != 5 || argc != 7){
+        //error
+        cout << "Usage: ./miProxy <listen-port> <www-ip> <alpha> <log>" << endl;
+        cout << "Alternative: ./miProxy --dns <listen-port> <dns-ip> <dns-port> <alpha> <log>" << endl;
+    } else if (argc == 5) {
+        //normal mode
+        listen_port = atoi(argv[1]);
+        www_ip = (char *)argv[2];
+        alpha = atof(argv[3]);
+        log_path = (char *)argv[4];
+
+    } else if (argc == 7) {
+        //bonus part
     }
 
-    /* Parse cmd arguments */
-    char * log_path = (char *) argv[1];
-    float alpha = atof(argv[2]);
-    int listen_port = atoi(argv[3]);
-
-    string ip;
-
-    if (argc == 6) {
-        char * dns_ip = (char *) argv[4];
-        char * dns_port = (char *) argv[5];
-
-        /* GET WWW_IP FROM NAMESERVER */
-        int dns_sockfd;
-        struct addrinfo hints, *servinfo, *p;
-        int rv;
-        int numbytes;
-
-        memset(&hints, 0, sizeof hints);
-        hints.ai_family = AF_UNSPEC;
-        hints.ai_socktype = SOCK_DGRAM;
-
-        if ((rv = getaddrinfo(dns_ip, dns_port, &hints, &servinfo)) != 0) {
-            fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
-            return 1;
-        }
-
-        // loop through all the results and make a socket
-        for(p = servinfo; p != NULL; p = p->ai_next) {
-            if ((dns_sockfd = socket(p->ai_family, p->ai_socktype,
-                                     p->ai_protocol)) == -1) {
-                perror("talker: socket");
-                continue;
-            }
-
-            break;
-        }
-
-        // set DNS headers n stuff, leave answer blank
-
-        DNSQuestion q;
-        strcpy(q.QNAME, "video.cs.jhu.edu");
-        q.QCLASS = 1;
-        q.QTYPE = 1;
-
-        DNSHeader h;
-        h.AA = 0;
-        h.RD = 0;
-        h.RA = 0;
-        h.Z = 0;
-        h.NSCOUNT = 0;
-        h.ARCOUNT = 0;
-
-        DNSMessage message;
-        message.question = q;
-        message.header = h;
-
-        // Serialize and send DNS message struct
-        if ((numbytes = sendto(dns_sockfd, reinterpret_cast<const char*>(&message), sizeof(message), 0,
-                               p->ai_addr, p->ai_addrlen)) == -1) {
-            exit(1);
-        }
-
-        // Deserialize and recv DNS message
-        int bytes_recv;
-        DNSMessage dns_response;
-
-        if ((bytes_recv = recvfrom(dns_sockfd, reinterpret_cast<char*>(&dns_response), MAXPACKETSIZE-1 , 0,
-                                   p->ai_addr, &p->ai_addrlen)) == -1) {
-            perror("recvfrom");
-            exit(1);
-        }
-
-        if (dns_response.header.RCODE == '3') {
-            cout << "RCODE = 3; domain name does not exist" << endl;
-            exit(1);
-        }
-
-
-        ip = string(dns_response.answer.RDATA);
-        freeaddrinfo(servinfo);
-
-        close(dns_sockfd);
-    } else {
-        ip = string(argv[6]);
+    //configure port to listen on
+    int socket_fd = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (socket_fd < 0){
+        exit(1);
     }
 
-    char * www_ip = (char *) ip.c_str();
-
-    /* Create a socket */
-    int sockfd = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (sockfd < 0)
-    {
-        printf("%s %d\n", __FUNCTION__, __LINE__);
-        perror("socket");
-        return -1;
-    }
-
-    /* Create sockaddr */
     struct sockaddr_in proxy_addr;
     proxy_addr.sin_family = AF_INET;
     proxy_addr.sin_addr.s_addr = INADDR_ANY;
     proxy_addr.sin_port = htons(listen_port);
 
-
-    /* Binding */
-    int ret = bind(sockfd, (const struct sockaddr *) &proxy_addr, sizeof(proxy_addr));
-    if (ret < 0)
-    {
-        printf("%s %d\n", __FUNCTION__, __LINE__);
-        perror("bind");
-        close(sockfd);
-        return -1;
+    int retv = bind(socket_fd, (struct sockaddr *) &proxy_addr, sizeof(proxy_addr));
+    if (retv < 0){
+        exit(1);
     }
 
-    /* Listening */
-    ret = listen(sockfd, BACKLOG);
-    if (ret < 0)
-    {
-        printf("%s %d\n", __FUNCTION__, __LINE__);
-        perror("listen");
-        close(sockfd);
-        return -1;
+    retv = listen(socket_fd, BACKLOG);
+    if (retv < 0){
+        exit(1);
     }
 
-    // Set of file descriptors to listen to
-    fd_set readSet;
-    // Keep track of each file descriptor accepted
+    fd_set read_fd_set;
     vector<int> fds;
-    // Data structure for storing bitrates
-    vector<int> bitrate_vector;
-    // Data structure for mapping with fd and throughput
+    vector<int> bitrates;
+    //stores the throughput for each "CDN"
     unordered_map<int, double> throughput_map;
-    //ofstream to write log info into log_path file
+
     ofstream log_out;
     log_out.open(log_path);
-    // run with sudo to make sure write happens
 
-    while (true)
-    {
-        // Set up the readSet
-        FD_ZERO(&readSet);
-        FD_SET(sockfd, &readSet);
-        for(int i = 0; i < (int) fds.size(); ++i)
-        {
-            FD_SET(fds[i], &readSet);
-        }
+    while (true){
 
-        int maxfd = 0;
-        if(fds.size() > 0)
-        {
-            maxfd = *max_element(fds.begin(), fds.end());
+        //why find max fd???
+        FD_ZERO(&read_fd_set);
+        FD_SET(socket_fd, &read_fd_set); //add socket_fd to read_fd_set
+        for (int i = 0; i < (int)fds.size(); i++){
+            FD_SET(fds[i], &read_fd_set);
         }
-        maxfd = max(maxfd, sockfd);
+        int max_fd = 0;
+        if (fds.size() > 0){
+            max_fd = *max_element(fds.begin(), fds.end());
+        }
+        max_fd = max(max_fd, socket_fd);
 
         // maxfd + 1 is important
-        int err = select(maxfd + 1, &readSet, NULL, NULL, NULL);
-        assert(err != -1);
+        // why?
+        retv = select(max_fd + 1, &read_fd_set, NULL, NULL, NULL);
+        if (retv < 0){
+            exit(1);
+        }
 
-        if(FD_ISSET(sockfd, &readSet))
-        {
-            int clientsd = accept(sockfd, NULL, NULL);
-            if(clientsd == -1)
-            {
-                printf("%s %d\n", __FUNCTION__, __LINE__);
-                cout << "Error on accept" << endl;
-            }
-            else
-            {
+        if (FD_ISSET(socket_fd, &read_fd_set)){
+            //socket_fd is part of read_fd_set
+            int clientsd = accept(socket_fd, NULL, NULL);
+            if (clientsd < 0){
+                exit(1);
+            } else {
+                //append clientsd to fds
                 fds.push_back(clientsd);
             }
         }
 
+        //copy first, ask questions later
         for(int i = 0; i < (int) fds.size(); ++i)
         {
-            if(FD_ISSET(fds[i], &readSet))
+            if(FD_ISSET(fds[i], &read_fd_set))
             {
                 char buf;
                 string request;
@@ -282,7 +188,7 @@ int main(int argc, char const *argv[]) {
                         printf("%s %d\n", __FUNCTION__, __LINE__);
                         cout << "Error recving bytes" << endl;
                         cout << strerror(errno) << endl;
-                        close(sockfd);
+                        close(socket_fd);
                         exit(1);
                     }
                     else if(bytesRecvd == 0) //end of recv
@@ -324,9 +230,9 @@ int main(int argc, char const *argv[]) {
                         if (throughput_map.find(cur_fd) != throughput_map.end())
                         {
                             int chosen_bitrate;
-                            int last_bitrate = bitrate_vector.front();
+                            int last_bitrate = bitrates.front();
 
-                            for(int b : bitrate_vector)
+                            for(int b : bitrates)
                             {
                                 if (b <= (throughput_map[cur_fd] / 1.5))
                                     chosen_bitrate = b;
@@ -356,7 +262,7 @@ int main(int argc, char const *argv[]) {
                     if (server_sd < 0) {
                         printf("%s %d\n", __FUNCTION__, __LINE__);
                         perror("socket");
-                        close(sockfd);
+                        close(socket_fd);
                         return -1;
                     }
 
@@ -370,7 +276,7 @@ int main(int argc, char const *argv[]) {
                     if (ret < 0) {
                         printf("%s %d\n", __FUNCTION__, __LINE__);
                         perror("connect");
-                        close(sockfd);
+                        close(socket_fd);
                         close(server_sd);
                         return -1;
                     }
@@ -379,7 +285,7 @@ int main(int argc, char const *argv[]) {
                     if (send(server_sd, request.c_str(), request.size(), 0) < 0) {
                         printf("%s %d\n", __FUNCTION__, __LINE__);
                         perror("send");
-                        close(sockfd);
+                        close(socket_fd);
                         close(server_sd);
                         return -1;
                     }
@@ -392,7 +298,7 @@ int main(int argc, char const *argv[]) {
                         if (recv(server_sd, &buf, 1, 0) < 0) {
                             printf("%s %d\n", __FUNCTION__, __LINE__);
                             perror("recv");
-                            close(sockfd);
+                            close(socket_fd);
                             close(server_sd);
                             return -1;
                         }
@@ -410,7 +316,7 @@ int main(int argc, char const *argv[]) {
                             int snd_index = response.find('\"', fst_index);
                             int br = atoi(response.substr(fst_index + 1, snd_index - fst_index - 1).c_str());
                             bool new_br = true;
-                            for (int b : bitrate_vector) {
+                            for (int b : bitrates) {
                                 if (br == b) {
                                     new_br = false;
                                     break;
@@ -419,8 +325,8 @@ int main(int argc, char const *argv[]) {
                             }
 
                             if (new_br)
-                                bitrate_vector.push_back(br);
-                            sort(bitrate_vector.begin(), bitrate_vector.end());
+                                bitrates.push_back(br);
+                            std::sort(bitrates.begin(), bitrates.end());
                             index = snd_index;
                             cur = response.find("bitrate", index);
                         }
@@ -433,7 +339,7 @@ int main(int argc, char const *argv[]) {
                         {
                             printf("%s %d\n", __FUNCTION__, __LINE__);
                             perror("send");
-                            close(sockfd);
+                            close(socket_fd);
                             close(server_sd);
                             return -1;
                         }
@@ -444,7 +350,7 @@ int main(int argc, char const *argv[]) {
                             if (recv(server_sd, &buf, 1, 0) < 0) {
                                 printf("%s %d\n", __FUNCTION__, __LINE__);
                                 perror("recv");
-                                close(sockfd);
+                                close(socket_fd);
                                 close(server_sd);
                                 return -1;
                             }
@@ -459,7 +365,7 @@ int main(int argc, char const *argv[]) {
                         double t_new = (content_len / 1000) / duration * 8;
                         double t_cur;
                         if (throughput_map.find(cur_fd) == throughput_map.end())
-                            t_cur = bitrate_vector.front();
+                            t_cur = bitrates.front();
                         else
                             t_cur = throughput_map[cur_fd];
 
@@ -475,7 +381,7 @@ int main(int argc, char const *argv[]) {
                     {
                         printf("%s %d\n", __FUNCTION__, __LINE__);
                         perror("send");
-                        close(sockfd);
+                        close(socket_fd);
                         close(server_sd);
                         return -1;
                     }
@@ -484,6 +390,6 @@ int main(int argc, char const *argv[]) {
         }
     }
     log_out.close();
-    close(sockfd);
+    close(socket_fd);
     return 0;
 }
