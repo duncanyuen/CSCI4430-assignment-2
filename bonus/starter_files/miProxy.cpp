@@ -102,5 +102,12 @@ int main(int argc, char const *argv[]) {
 
         if (FD_ISSET(socket_fd, &read_fd_set)){
             //socket_fd is part of read_fd_set
+            int clientsd = accept(sockfd, NULL, NULL);
+            if (clientsd < 0){
+                exit(1);
+            } else {
+                //append clientsd to fds
+                fds.push_back(clientsd);
+            }
         }
     }
