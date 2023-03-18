@@ -33,8 +33,6 @@ using std::to_string;
 using std::unordered_map;
 using std::vector;
 
-// TODO: fix style
-
 /* Extract the video chunk name from request */
 string get_chunkname(string request)
 {
@@ -42,7 +40,6 @@ string get_chunkname(string request)
     int end_index = request.find(' ', get_index + 4);
     int vod_index = request.rfind("vod", end_index);
     string fn = request.substr(vod_index + 4, end_index - vod_index - 4);
-    // printf("%s\n", fn.c_str());
     return fn;
 }
 
@@ -78,8 +75,7 @@ string recv_response(int server_sd)
 
         if (bytesRecvd < 0)
         {
-            printf("%s %d\n", __FUNCTION__, __LINE__);
-            perror("recv");
+            perror("Error in recv");
             exit(-1);
         }
 
@@ -100,24 +96,17 @@ int main(int argc, char const *argv[])
     float alpha;
     char *log_path;
 
-    if (argc != 6 || argc != 7)
+    if (argc != 6)
     {
-        // error
         cout << "Usage: ./miProxy --nodns <listen-port> <www-ip> <alpha> <log>" << endl;
-        cout << "Alternative: ./miProxy --dns <listen-port> <dns-ip> <dns-port> <alpha> <log>" << endl;
     }
-
-    if (argc == 6)
+    else
     {
         // normal mode
         listen_port = atoi(argv[2]);
         www_ip = (char *)argv[3];
         alpha = atof(argv[4]);
         log_path = (char *)argv[5];
-    }
-    else if (argc == 7)
-    {
-        // bonus part
     }
 
     // configure port to listen on
@@ -152,14 +141,13 @@ int main(int argc, char const *argv[])
     unordered_map<int, double> throughput_map;
     string f4m;
     string swf;
+    char client_ip[INET_ADDRSTRLEN];
 
     ofstream log_out;
     log_out.open(log_path);
 
     while (true)
     {
-
-        // cout << "=====================Enter While Loop=====================" << endl;
         //  why find max fd???
         FD_ZERO(&read_fd_set);
         FD_SET(socket_fd, &read_fd_set); // add socket_fd to read_fd_set
@@ -194,6 +182,11 @@ int main(int argc, char const *argv[])
             }
             else
             {
+                // get client ip address
+                struct sockaddr_in client_addr;
+                int client_len = sizeof(client_addr);
+                getpeername(clientsd, (struct sockaddr *)&client_addr, (socklen_t *)&client_len);
+                inet_ntop(AF_INET, &(client_addr.sin_addr), client_ip, INET_ADDRSTRLEN);
                 // append clientsd to fds
                 fds.push_back(clientsd);
             }
@@ -211,24 +204,19 @@ int main(int argc, char const *argv[])
                 gettimeofday(&t1, NULL);
                 int cur_fd = fds[i];
 
-                // cout << "=====================Receiving From the client=====================" << endl;
-
-                /* Complete receiving the request from clients */
                 while (1)
                 {
+                    // receiving the request from clients
                     int bytesRecvd = recv(cur_fd, &buf, 1, 0);
 
                     if (bytesRecvd < 0)
                     {
-                        printf("%s %d\n", __FUNCTION__, __LINE__);
-                        cout << "Error recving bytes" << endl;
-                        cout << strerror(errno) << endl;
+                        perror("Error recving bytes");
                         close(socket_fd);
                         exit(1);
                     }
                     else if (bytesRecvd == 0) // end of recv
                     {
-                        printf("client: %d, fds i = %d\n", cur_fd, i);
                         perror("Connection closed");
                         if (fds.size() != 0)
                             fds.erase(fds.begin() + i);
@@ -246,60 +234,44 @@ int main(int argc, char const *argv[])
                     }
                 }
 
-                int swfPos = request.find(".swf");
-                if (swfPos != string::npos)
-                {
-                    swfPos = request.find(swf);
-                    printf("swf in flash: %s\n", swf.c_str());
-                    printf("f4m in flash: %s\n", f4m.c_str());
-                    request.replace(swfPos, swf.length(), "vod/" + f4m);
-                    int connectionPos = request.find("Connection");
-                    request.replace(connectionPos - 2, 0, swf);
-                }
                 /* Client Keep alive */
                 if (closed == false)
                 {
-                    // cout << "=====================Check request=====================" << endl;
                     bool is_video_data = check_video_data(request);
-                    int cur_bitrate;
-                    string chunk_name;
+                    int currentBitrate;
+                    string chunkName;
 
                     /* Client is requesting video data,
                        modify the request for bitrate adaption */
                     if (is_video_data)
                     {
-                        // cout << "=====================Processing data=====================" << endl;
-                        chunk_name = get_chunkname(request);
-                        int seg_index = chunk_name.find("Seg");
-                        int bitrate = atoi(chunk_name.substr(0, seg_index).c_str());
-                        cur_bitrate = bitrate;
+                        chunkName = get_chunkname(request);
+                        int seg_index = chunkName.find("Seg");
+                        int bitrate = atoi(chunkName.substr(0, seg_index).c_str());
+                        currentBitrate = bitrate;
+                        int newBitrate;
+                        int smallestBitrate = bitrates.front();
 
-                        if (throughput_map.find(cur_fd) != throughput_map.end())
+                        for (int b : bitrates)
                         {
-                            int chosen_bitrate;
-                            int last_bitrate = bitrates.front();
-
-                            for (int b : bitrates)
+                            if (b <= (throughput_map[cur_fd] / 1.5))
+                                newBitrate = b;
+                            else
                             {
-                                if (b <= (throughput_map[cur_fd] / 1.5))
-                                    chosen_bitrate = b;
-                                else
-                                {
-                                    chosen_bitrate = last_bitrate;
-                                    break;
-                                }
-                                last_bitrate = b;
+                                newBitrate = smallestBitrate;
+                                break;
                             }
-                            cur_bitrate = chosen_bitrate;
-                            if (cur_bitrate != bitrate)
-                            {
-                                string new_name = to_string(cur_bitrate) + chunk_name.substr(seg_index);
-                                int get_index = request.find("GET");
-                                int end_index = request.find(' ', get_index + 4);
-                                int vod_index = request.rfind("vod", end_index);
-                                request.replace(vod_index + 4, end_index - vod_index - 4, new_name);
-                                chunk_name = new_name;
-                            }
+                            smallestBitrate = b;
+                        }
+                        currentBitrate = newBitrate;
+                        if (currentBitrate != bitrate)
+                        {
+                            string newChunkName = to_string(currentBitrate) + chunkName.substr(seg_index);
+                            int newChunkStartPos = request.find("GET") + 4;
+                            int newChunkEndPos = request.find(' ', newChunkStartPos);
+                            newChunkStartPos = request.rfind("vod", newChunkEndPos);
+                            request.replace(newChunkStartPos + 4, newChunkEndPos - newChunkStartPos - 4, newChunkName);
+                            chunkName = newChunkName;
                         }
                     }
 
@@ -308,8 +280,7 @@ int main(int argc, char const *argv[])
                     int server_sd = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
                     if (server_sd < 0)
                     {
-                        printf("%s %d\n", __FUNCTION__, __LINE__);
-                        perror("socket");
+                        perror("Error creating socket");
                         close(socket_fd);
                         return -1;
                     }
@@ -323,26 +294,22 @@ int main(int argc, char const *argv[])
                     int ret = connect(server_sd, (const struct sockaddr *)&server_addr, sizeof(server_addr));
                     if (ret < 0)
                     {
-                        printf("%s %d\n", __FUNCTION__, __LINE__);
-                        perror("connect");
+                        perror("Error connection");
                         close(socket_fd);
                         close(server_sd);
                         return -1;
                     }
 
-                    /* Send */
+                    /* Send request to server */
                     if (send(server_sd, request.c_str(), request.size(), 0) < 0)
                     {
-                        printf("%s %d\n", __FUNCTION__, __LINE__);
-                        perror("send");
+                        perror("Error sending to server");
                         close(socket_fd);
                         close(server_sd);
                         return -1;
                     }
-                    printf("client request: \n%s", request.c_str());
 
-                    cout << "=====================Receiving request from the server=====================" << endl;
-                    /* Receive from server */
+                    /* Receive response from server */
                     string response = recv_response(server_sd);
                     string content_type = get_value(response, "Content-Type");
                     int content_len = atoi(get_value(response, "Content-Length").c_str());
@@ -350,99 +317,78 @@ int main(int argc, char const *argv[])
                     {
                         if (recv(server_sd, &buf, 1, 0) < 0)
                         {
-                            printf("%s %d\n", __FUNCTION__, __LINE__);
-                            perror("recv");
+                            perror("Error recv from server");
                             close(socket_fd);
                             close(server_sd);
                             return -1;
                         }
                         response += buf;
                     }
-                    printf("server response: \n%s", response.c_str());
-                    if (response.find(".f4m") != -1)
-                    {
-                        int f4mEndPos = response.find(".f4m");
-                        string sub = response.substr(0, f4mEndPos + 4);
-                        int f4mStartPos = sub.find_last_of("/");
-                        f4m = response.substr(f4mStartPos + 1, f4mEndPos + 3 - f4mStartPos);
-                        cout << "f4m in html: " << f4m << endl;
 
-                        int swfEndPos = response.find(".swf");
-                        string swfSub = response.substr(0, swfEndPos + 4);
-                        int swfStartPos = swfSub.find_last_of("\"");
-                        swf = response.substr(swfStartPos + 1, swfEndPos + 3 - swfStartPos);
-                        cout << "swf in html: " << swf << endl;
-                    }
                     /* Getting video xml data and parse available bitrates */
                     if (content_type.find("text/xml") != -1)
                     {
-                        cout << "=====================Getting Video Xml Data=====================" << endl;
                         int index = 0;
-                        int cur = response.find("bitrate", index);
-                        while (cur != -1)
+                        int currentPos = response.find("bitrate=", index);
+                        while (currentPos != -1)
                         {
-                            int fst_index = response.find('\"', cur);
-                            int snd_index = response.find('\"', fst_index);
-                            int br = atoi(response.substr(fst_index + 1, snd_index - fst_index - 1).c_str());
-                            bool new_br = true;
+                            int bitrateStartPos = response.find('\"', currentPos);
+                            int bitrateEndPos = response.find('\"', bitrateStartPos + 1);
+                            int bitrate = atoi(response.substr(bitrateStartPos + 1, bitrateEndPos - bitrateStartPos - 1).c_str());
+                            bool isNew = true;
                             for (int b : bitrates)
                             {
-                                if (br == b)
+                                if (bitrate == b)
                                 {
-                                    new_br = false;
+                                    isNew = false;
                                     break;
                                 }
-                                new_br = true;
+                                isNew = true;
                             }
 
-                            if (new_br)
-                                bitrates.push_back(br);
+                            if (isNew)
+                            {
+                                bitrates.push_back(bitrate);
+                            }
+
                             std::sort(bitrates.begin(), bitrates.end());
-                            index = snd_index;
-                            cur = response.find("bitrate", index);
+                            index = bitrateEndPos;
+                            currentPos = response.find("bitrate=", index);
                         }
 
-                        cout << "=====================Request nolist.f4m=====================" << endl;
+                        string request_chunk = request;
+                        request_chunk.replace(request.find(".f4m"), 4, "_nolist.f4m");
 
-                        string request_cp = request;
-                        request_cp.replace(request.find(".f4m"), 4, "_nolist.f4m");
-
-                        cout << "=====================Sending=====================" << endl;
-                        if (send(server_sd, request_cp.c_str(), request_cp.size(), 0) < 0)
+                        // Sending video data request to server
+                        if (send(server_sd, request_chunk.c_str(), request_chunk.size(), 0) < 0)
                         {
-                            printf("%s %d\n", __FUNCTION__, __LINE__);
-                            perror("send");
+                            perror("Error sending to server");
                             close(socket_fd);
                             close(server_sd);
                             return -1;
                         }
-                        cout << request_cp << endl;
 
-                        cout << "=====================Receiving=====================" << endl;
                         response = recv_response(server_sd);
                         content_len = atoi(get_value(response, "Content-Length").c_str());
                         for (int i = 0; i < content_len; i++)
                         {
+                            // receiving video xml data from server
                             if (recv(server_sd, &buf, 1, 0) < 0)
                             {
-                                printf("%s %d\n", __FUNCTION__, __LINE__);
-                                perror("recv");
+                                perror("Error recv from server");
                                 close(socket_fd);
                                 close(server_sd);
                                 return -1;
                             }
                             response += buf;
                         }
-                        cout << response << endl;
                     }
                     /* Getting video chunk, calculate the throughput and log out info*/
                     else if (content_type.find("video/f4f") != -1)
                     {
-                        cout << "=====================Getting Video Chunk=====================" << endl;
-
                         gettimeofday(&t2, NULL);
                         double duration = t2.tv_sec - t1.tv_sec + (t2.tv_usec - t1.tv_usec) / 1000000.0;
-                        double t_new = (content_len / 1000) / duration * 8;
+                        double t_new = (content_len/ 1000) / duration * 8 ;
                         double t_cur;
                         if (throughput_map.find(cur_fd) == throughput_map.end())
                             t_cur = bitrates.front();
@@ -452,15 +398,14 @@ int main(int argc, char const *argv[])
                         t_cur = alpha * t_new + (1 - alpha) * t_cur;
                         throughput_map[cur_fd] = t_cur;
 
-                        cout << " " << cur_bitrate << " " << chunk_name << " " << string(www_ip) << " " << duration << " " << throughput_map[cur_fd] << " " << t_cur << " " << cur_bitrate << endl;
-                        log_out << " " << cur_bitrate << " " << chunk_name << " " << string(www_ip) << " " << duration << " " << throughput_map[cur_fd] << " " << t_cur << " " << cur_bitrate << endl;
+                        log_out << client_ip << " " << currentBitrate << " " << chunkName << " " << string(www_ip) << " " << duration << " " << t_new << " " << t_cur << " " << currentBitrate << endl;
                         log_out.flush();
                     }
+
                     /* Send response to client */
                     if (send(cur_fd, response.c_str(), response.size(), 0) < 0)
                     {
-                        printf("%s %d\n", __FUNCTION__, __LINE__);
-                        perror("send");
+                        perror("Error sending to client");
                         close(socket_fd);
                         close(server_sd);
                         return -1;
