@@ -182,11 +182,6 @@ int main(int argc, char const *argv[])
             }
             else
             {
-                // get client ip address
-                struct sockaddr_in client_addr;
-                int client_len = sizeof(client_addr);
-                getpeername(clientsd, (struct sockaddr *)&client_addr, (socklen_t *)&client_len);
-                inet_ntop(AF_INET, &(client_addr.sin_addr), client_ip, INET_ADDRSTRLEN);
                 // append clientsd to fds
                 fds.push_back(clientsd);
             }
@@ -203,6 +198,13 @@ int main(int argc, char const *argv[])
                 struct timeval t1, t2;
                 gettimeofday(&t1, NULL);
                 int cur_fd = fds[i];
+                
+                // get client ip address
+                struct sockaddr_in client_addr;
+                int client_len = sizeof(client_addr);
+                getpeername(fds[i], (struct sockaddr *)&client_addr, (socklen_t *)&client_len);
+                inet_ntop(AF_INET, &(client_addr.sin_addr), client_ip, INET_ADDRSTRLEN);
+                
 
                 while (1)
                 {
