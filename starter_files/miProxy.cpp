@@ -196,15 +196,13 @@ int main(int argc, char const *argv[])
                 string request;
                 bool closed = false;
                 struct timeval t1, t2;
-                gettimeofday(&t1, NULL);
                 int cur_fd = fds[i];
-                
+
                 // get client ip address
                 struct sockaddr_in client_addr;
                 int client_len = sizeof(client_addr);
                 getpeername(fds[i], (struct sockaddr *)&client_addr, (socklen_t *)&client_len);
                 inet_ntop(AF_INET, &(client_addr.sin_addr), client_ip, INET_ADDRSTRLEN);
-                
 
                 while (1)
                 {
@@ -315,6 +313,7 @@ int main(int argc, char const *argv[])
                     string response = recv_response(server_sd);
                     string content_type = get_value(response, "Content-Type");
                     int content_len = atoi(get_value(response, "Content-Length").c_str());
+                    gettimeofday(&t1, NULL);
                     for (int i = 0; i < content_len; i++)
                     {
                         if (recv(server_sd, &buf, 1, 0) < 0)
@@ -326,6 +325,7 @@ int main(int argc, char const *argv[])
                         }
                         response += buf;
                     }
+                    gettimeofday(&t2, NULL);
 
                     /* Getting video xml data and parse available bitrates */
                     if (content_type.find("text/xml") != -1)
@@ -388,9 +388,8 @@ int main(int argc, char const *argv[])
                     /* Getting video chunk, calculate the throughput and log out info*/
                     else if (content_type.find("video/f4f") != -1)
                     {
-                        gettimeofday(&t2, NULL);
                         double duration = t2.tv_sec - t1.tv_sec + (t2.tv_usec - t1.tv_usec) / 1000000.0;
-                        double t_new = (content_len/ 1000) / duration * 8 ;
+                        double t_new = (content_len / 1000) / duration * 8;
                         double t_cur;
                         if (throughput_map.find(cur_fd) == throughput_map.end())
                             t_cur = bitrates.front();
@@ -400,7 +399,7 @@ int main(int argc, char const *argv[])
                         t_cur = alpha * t_new + (1 - alpha) * t_cur;
                         throughput_map[cur_fd] = t_cur;
 
-                        log_out << client_ip << " " << currentBitrate << " " << chunkName << " " << string(www_ip) << " " << duration << " " << t_new << " " << t_cur << " " << currentBitrate << endl;
+                        log_out << client_ip << " " << chunkName << " " << string(www_ip) << " " << duration << " " << t_new << " " << t_cur << " " << currentBitrate << endl;
                         log_out.flush();
                     }
 
